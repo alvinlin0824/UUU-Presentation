@@ -1,0 +1,458 @@
+---
+title: "R Package"
+subtitle: "Import Upload Data much easier"
+author: "Alvin, Lin"
+date: today
+date-format: full
+format:
+  revealjs:
+    incremental: true
+    slide-number: true
+    chalkboard:
+      theme: whiteboard
+      boardmarker-width: 5
+      buttons: false
+---
+
+```{r}
+#| label: Libaray Packages
+#| include: false
+#| message: false
+library(tidyverse)
+library(vroom)
+library(haven)
+library(fs)
+```
+
+
+# Outline
+
+-   Import CSV Functions
+
+# Upload Data App
+
+-   Apol(events.csv, gluc.csv, glucPlus.csv, freestyle.csv)
+-   Mobi(events.csv, gluc.csv, glucPlus.csv, freestyle.csv)
+-   Atna(events.csv, gluc.csv, freestyle.csv)
+-   Mobi(anaPlus.csv) by UDP
+
+## Past
+
+```{r}
+#| label: Find all events gluc files csv
+#| eval: false
+file_list <- dir_ls(gsub("\\\\", "/", r"(\\oneabbott.com\dept\ADC\Technical_OPS\Clinical_Affairs\CDM_23238\004\UUU)"),recurse = T, regexp = "*events[.]csv$|*gluc[.]csv$") |> 
+             path_filter(regexp = "Archive|Archives|Tranfer|Tranfers", invert = T, ignore.case = T)
+```
+
+```{r}
+#| label: Filter events and gluc
+#| eval: false
+events_path <- file_list |> path_filter(regexp = "events.csv", ignore.case = T)
+gluc_path <- file_list |> path_filter(regexp = "gluc.csv", ignore.case = T)
+```
+
+```{r}
+#| label: Apol function
+#| echo: true
+Apol_fun <- function(index, ...){
+    # Read Events csv
+    events <- vroom(events_path[index],delim = ",",col_names = T,show_col_types = F,col_types = c(`Col 9` = "c"),col_select = c(Date,Time,Type,`Col 9`))
+    # Read Gluc csv
+    gluc <- vroom(gluc_path[index],delim = ",",col_names = T,show_col_types = F,col_types = c(Type = "c"),col_select = c(`Unique Record ID`,Date,Time,Type,Gl))
+
+    if (nrow(events) == 2 && nrow(gluc) == 2) {tibble()}
+    else {
+          # Time is NA with vroom function
+          if (sum(is.na(gluc$Time)) > 2) {
+          gluc <- vroom(gluc_path[index],delim = ",",col_names = T,show_col_types = F,col_types = c(Type = "c"),col_select = c(`Unique Record ID`,Date,Time,Type,Gl),n_max = 2) %>%
+   bind_rows(data.table::fread(gluc_path[index],skip = 2,select = c(1:5),col.names = c("Unique Record ID","Date","Time","Type","Gl"),colClasses = c("V2" = "Date","V4" = "character")))
+          }
+
+          events <- events %>%
+                    filter(Type == "SENSOR_STARTED (58)") %>%
+                    transmute(
+                            `Date Time` = ymd_hms(str_c(ymd(Date),hms::as_hms(Time),sep = " ")),
+                             Type = Type,
+                            `Sensor Serial Number` = `Col 9`
+                              ) %>%
+                # Consider Replaced Sensors
+                slice_max(`Date Time`,n = 1)
+
+          ## Extract Subject ID, Condition ID, Reader ID.
+      gluc <- gluc %>%
+              transmute(`Subject ID` =
+      str_extract(gluc[1,1],regex("(?<=Subject ID = ).{4}",ignore_case = T)),
+                   `Condition ID` = str_extract(gluc[1,1],regex("(?<=Condition ID = ).{3}",ignore_case = T)),
+                  `Reader ID` = str_extract(gluc[2,1],regex("(?<=\\s).{13}",ignore_case = T)),
+                  `Date Time` = ymd_hms(str_c(ymd(Date),hms::as_hms(Time),sep = " ")),
+                         Type = Type,
+                           Gl = Gl) %>%
+                   slice(3:n())
+          ## Bind rows Events with Gluc
+          events %>%
+            bind_rows(gluc) %>%
+            fill(c(`Subject ID`,`Condition ID`,`Reader ID`),.direction = "up") %>%
+            fill(`Sensor Serial Number`,.direction = "down") %>%
+            relocate(`Subject ID`,`Condition ID`,`Sensor Serial Number`,
+                     `Reader ID`,`Date Time`,Type,Gl)
+  }
+}
+```
+
+```{r}
+#| label: Index
+#| warning: false
+#| eval: false
+Apol_fun(70) |> View()
+```
+
+```{r}
+#| label: For loop 
+#| warning: false
+#| eval: false
+UUU <- vector("list",length(events_path))
+for (i in seq_along(events_path)) {
+  UUU[[i]] <- Apol_fun(index = i)
+}
+```
+
+```{r}
+#| label: List Rbind
+#| eval: false
+UUU <- UUU %>% 
+       list_rbind() %>% 
+       # Remove Duplicated Uploads
+       distinct()
+```
+
+## Now
+
+-   UUU::apol()
+-   UUU::mobi()
+-   UUU::atna()
+-   UUU::freestyle()  # Load BG reference
+-   UUU::mobi_anaPlus() # Load UDP data
+
+
+```{r}
+#| label: Library UUU
+#| eval: false
+library(UUU)
+```
+
+<!-- Apol -->
+```{r}
+#| label: Apol Find all events gluc and freestyle files csv with UUU
+#| eval: false
+file_list_apol <- dir_ls(gsub("\\\\", "/", r"(\\wf00168p.oneabbott.com\data1\CDM\ADC-US-VAL-21206\UploadData\AUU\AUU_DataFiles)"),recurse = T,regexp = "*events[.]csv$|*gluc[.]csv$")
+```
+
+```{r}
+#| eval: false
+filter_path(file_path = file_list_apol) |> 
+                            map(\(df) df |> head(n = 5))
+```
+
+```{r}
+#| label: Apol Filter events and gluc with UUU
+#| eval: false
+events_path_apol <- file_list_apol |> fs::path_filter(regexp = "events.csv", ignore.case = T)
+gluc_path_apol <- file_list_apol |> fs::path_filter(regexp = "gluc.csv", ignore.case = T)
+```
+
+```{r}
+#| eval: false
+#| warning: false
+UUU::apol(events = events_path_apol, gluc = gluc_path_apol) |> View()
+```
+
+```{r}
+#| label: Import Apol.csv with UUU
+#| eval: false
+#| warning: false
+random_index <- sample(1:length(events_path_apol),10,replace = F)
+apol(events = events_path_apol[random_index], gluc = gluc_path_apol[random_index]) |> View()
+```
+
+<!-- Mobi -->
+```{r}
+#| label: Mobi Find all events gluc and freestyle files csv with UUU
+#| eval: false
+file_list_mobi <- dir_ls(gsub("\\\\", "/", r"(\\oneabbott.com\dept\ADC\Technical_OPS\Clinical_Affairs\CDM_16157\116)"),recurse = T,regexp = "*events[.]csv$|*glucPlus[.]csv$|*freestyle[.]csv$") |> 
+                   path_filter(regexp = "INT|Archive",invert = T, ignore.case = T)
+```
+
+```{r}
+#| eval: false
+filter_path(file_path = file_list_mobi,filter_text = "UUUINT|BGM") |> 
+                            map(\(df) df |> head(n = 5))
+```
+
+```{r}
+#| label: Mobi Final Filter events and glucPlus with UUU
+#| eval: false
+events_path_mobi <- file_list_mobi |> path_filter(regexp = "BGM", invert = T, ignore.case = T) |> 
+                                      path_filter(regexp = "events.csv", ignore.case = T)
+glucplus_path_mobi <- file_list_mobi |> path_filter(regexp = "glucPlus.csv", ignore.case = T)
+free_path_mobi <- file_list_mobi |> path_filter(regexp = "UUU", invert = T, ignore.case = T) |>
+                                    path_filter(regexp = "freestyle.csv", ignore.case = T)
+```
+
+```{r}
+#| eval: false
+#| warning: false
+mobi(events = events_path_mobi, gluc = glucplus_path_mobi,index = 1) |> View()
+```
+
+```{r}
+#| label: Import Mobi.csv with UUU
+#| eval: false
+#| warning: false
+random_index <- sample(1:length(events_path_mobi),10,replace = F)
+mobi(events = events_path_mobi[random_index], gluc = glucplus_path_mobi[random_index]) |> View()
+```
+
+```{r}
+#| label: Import Mobi. freestyle.csv with UUU
+#| eval: false
+#| warning: false
+random_index <- sample(1:length(free_path_mobi),10,replace = F)
+freestyle(freestyle_path = free_path_mobi[random_index]) |> View()
+```
+
+<!-- Atna -->
+```{r}
+#| label: Atna Find all events gluc and freestyle files csv with UUU
+#| eval: false
+file_list_atna <- dir_ls(gsub("\\\\", "/", r"(\\wf00168p.oneabbott.com\data1\CDM\ADC-US-RES-21210\UploadData\AUU\AUU_DataFiles)"),recurse = T, regexp = "*events[.]csv$|*gluc[.]csv$") |> 
+                  path_filter(regexp = "Archive|Archives|Tranfer|Tranfers", invert = T, ignore.case = T)
+```
+
+```{r}
+#| eval: false
+filter_path(file_path = file_list_atna) |> 
+    map(\(df) df |> head(n = 5))
+```
+
+```{r}
+#| label: atna Filter events and gluc with UUU
+#| eval: false
+events_path_atna <- file_list_atna |> path_filter(regexp = "events.csv", ignore.case = T)
+gluc_path_atna <- file_list_atna |> path_filter(regexp = "gluc.csv", ignore.case = T)
+```
+
+```{r}
+#| eval: false
+#| warning: false
+atna(events = events_path_atna, gluc = gluc_path_atna,index = 25) |> View()
+```
+
+```{r}
+#| label: Import atna.csv with UUU
+#| eval: false
+#| warning: false
+random_index <- sample(1:length(events_path_atna),5,replace = F)
+atna(events = events_path_atna[random_index], gluc = gluc_path_atna[random_index]) |> View()
+```
+
+<!-- anaPlus -->
+```{r}
+#| label: Import events.csv and anaPlus for glucose
+#| eval: false
+file_list_anaPlus <- dir_ls(gsub("\\\\", "/", r"(C:\Project\ADC-US-RES-22225-SE46_47_48)"),recurse = T, regexp = "*events[.]csv$|*anaPlus[.]csv$") |> 
+                     path_filter(regexp = "LifeCount", invert = T, ignore.case = T)
+```
+
+```{r}
+#| label: Filter Path
+#| warning: false
+#| eval: false
+events_path_anaPlus <- file_list_anaPlus |> path_filter(regexp = "events.csv", ignore.case = T)
+gluc_path_anaPlus <- file_list_anaPlus |> path_filter(regexp = "anaPlus.csv", ignore.case = T)
+```
+
+```{r}
+#| label: Anaplus with Index 
+#| warning: false
+#| eval: false
+mobi_anaPlus(events = events_path_anaPlus, ana = gluc_path_anaPlus,index = 5) |> View()
+```
+
+```{r}
+#| label: Anaplus 
+#| warning: false
+#| eval: false
+random_index <- sample(1:length(events_path_anaPlus),5,replace = F)
+mobi_anaPlus(events = events_path_anaPlus[random_index], ana = gluc_path_anaPlus[random_index]) |> View()
+```
+
+<!-- Left join -->
+
+```{r}
+#| eval: false
+cad2 <- read_sas(gsub("\\\\", "/", r"(\\oneabbott.com\dept\ADC\Technical_OPS\Clinical_Affairs\CDM_Statistics\Statistics\Training\SAS 2. Data Cleaning\Current\cad2.sas7bdat)"))
+cad2 <- cad2 |> 
+        filter(!str_detect(DSYN01,regex("CHECK HERE IF NO DATA RECORDED|no_data_recorded",ignore_case = T))) |>
+        mutate(Subject = as.character(Subject)) |> 
+        # order by subject desending order
+        arrange(Subject)
+```
+
+```{r}
+#| eval: false
+cad3 <- read_sas(gsub("\\\\", "/", r"(\\oneabbott.com\dept\ADC\Technical_OPS\Clinical_Affairs\CDM_Statistics\Statistics\Training\SAS 2. Data Cleaning\Current\cad3.sas7bdat)"))
+cad3 <- cad3 |> 
+        filter(!str_detect(DSYN01,regex("CHECK HERE IF NO DATA RECORDED|no_data_recorded",ignore_case = T))) |>
+        mutate(Subject = as.character(Subject)) |> 
+        # order by subject descending order
+        arrange(Subject)
+```
+
+```{r}
+#| eval: false
+cad4 <- read_sas(gsub("\\\\", "/", r"(\\oneabbott.com\dept\ADC\Technical_OPS\Clinical_Affairs\CDM_Statistics\Statistics\Training\SAS 2. Data Cleaning\Current\cad4.sas7bdat)"))
+cad4 <- cad4 |> 
+        filter(!str_detect(DSYN01,regex("CHECK HERE IF NO DATA RECORDED|no_data_recorded",ignore_case = T))) |>
+        mutate(Subject = as.character(Subject)) |> 
+        # order by subject descending order
+        arrange(Subject)
+```
+
+```{r}
+#| eval: false
+cad5 <- read_sas(gsub("\\\\", "/", r"(\\oneabbott.com\dept\ADC\Technical_OPS\Clinical_Affairs\CDM_Statistics\Statistics\Training\SAS 2. Data Cleaning\Current\cad5.sas7bdat)"))
+cad5 <- cad5 |> 
+        filter(!str_detect(DSYN01,regex("CHECK HERE IF NO DATA RECORDED|no_data_recorded",ignore_case = T))) |>
+        mutate(Subject = as.character(Subject)) |> 
+        # order by subject descending order
+        arrange(Subject)
+```
+
+```{r}
+#| eval: false
+cad6 <- read_sas(gsub("\\\\", "/", r"(\\oneabbott.com\dept\ADC\Technical_OPS\Clinical_Affairs\CDM_Statistics\Statistics\Training\SAS 2. Data Cleaning\Current\cad6.sas7bdat)"))
+cad6 <- cad6 |> 
+        filter(!str_detect(DSYN01,regex("CHECK HERE IF NO DATA RECORDED|no_data_recorded",ignore_case = T))) |>
+        mutate(Subject = as.character(Subject)) |> 
+        # order by subject descending order
+        arrange(Subject)
+```
+
+```{r}
+#| label: Left join
+#| eval: false
+# 146 rows
+cad2 |> 
+     select(Subject,DSDTC01,DSYN02:last_col()) |> 
+# 145 rows 
+     left_join(cad3 |> 
+                select(Subject,DSDTC01,DSYN02:last_col()),
+               by = join_by(Subject == Subject)) |> 
+     left_join(cad4 |> 
+                select(Subject,DSDTC01,DSYN02:last_col()),
+               by = join_by(Subject == Subject))
+``` 
+
+<!-- Pairing -->
+```{r}
+#| label: Import UUU.rds
+#| eval: false
+UUU <- readRDS(gsub("\\\\", "/", r"(\\oneabbott.com\dept\ADC\Technical_OPS\Clinical_Affairs\Clinical Study Files\Apollo\ADC-US-RES-22225 Multi-Analyte Studies\Statistics\Programs\SE45\AL\Data\UUU.rds)"))
+```
+
+```{r}
+#| label: Import BG.rds
+#| eval: false
+BG <- readRDS(gsub("\\\\", "/", r"(\\oneabbott.com\dept\ADC\Technical_OPS\Clinical_Affairs\Clinical Study Files\Apollo\ADC-US-RES-22225 Multi-Analyte Studies\Statistics\Programs\SE45\AL\Data\BG.rds)"))
+```
+
+```{r}
+#| label: Paired Data
+#| eval: false
+Ap <- UUU |> 
+      select(`Subject ID`:ANA) |> 
+      dplyr::mutate(eTime = as.numeric(difftime(`Date Time`,first(`Date Time`),units = "secs")),
+                    Day = floor(eTime/86400) + 1,
+                    .by = c(`Subject ID`,`Condition ID`,`Sensor Serial Number`)) |>
+      # Historic Glucose and Real Time Glucose
+      filter(Type != "SENSOR_STARTED (58)") |>
+      # Remove Extreme Gl readings < 40 or > 400
+      filter(between(ANA,40,400)) |> 
+      group_split(`Subject ID`,`Condition ID`,Type,`Sensor Serial Number`) |>  
+      # New anonymous function
+      map(\(df) PairBg(sensor_data = df,apol = F),.progress = T) |> 
+      # formula syntax
+      # map(~ PAIRBG_fun(data = .x)) %>%
+      list_rbind() |>
+      # Row-wise Calculation
+      mutate(
+            # Reference glucose values < 100 mg/dL
+            `Difference(mg/dL)` = ANA - Reference,
+            `Absolute Difference(mg/dL)` = abs(`Difference(mg/dL)`),
+            # Reference glucose values >= 100 mg/dL
+            `Relative Difference(%)` = (`Difference(mg/dL)`/Reference)*100,
+            `Absolute Relative Difference(%)` = abs(`Relative Difference(%)`),
+             Lot = str_sub(`Condition ID`,3,3)
+             )
+```
+
+```{r}
+#| label: SAS code pairing
+#| eval: false
+data bg_in;
+ set out206.bg_data;
+run;
+
+proc sql;
+ create table real_paired_bg as
+ select a.*, b.*, mean(meter_rslt) as bg_avg
+ from real a, bg_in b
+ where a.subject=b.subjid and a.dtm_sec-300<=b.fs_dtm<=a.dtm_sec+300  
+ group by subjid, fs_dtm
+ order by subjid, fs_dtm;
+quit;
+
+proc sql;
+ create table hist_paired_bg as
+ select a.*, b.*, mean(meter_rslt) as bg_avg
+ from hist a, bg_in b
+ where a.subject=b.subjid and a.dtm_sec-480<=b.fs_dtm<=a.dtm_sec+480
+ group by subjid, fs_dtm
+ order by subjid, fs_dtm;
+quit;
+
+data paired_bg;
+ set real_paired_bg hist_paired_bg;
+ if meter_rslt^=bg_avg then do; bg_dup=1; end;
+run;
+
+data paired_bg1;
+ set paired_bg;
+ abstimediff=abs(dtm_sec-fs_dtm);
+run;
+
+proc sort data=paired_bg1; by event subjid sensor fs_dtm abstimediff meter_rslt descending dtm_sec; run;
+
+data paired_bg2;
+ set paired_bg1;
+ retain tdiff;
+ by event subjid sensor fs_dtm abstimediff meter_rslt descending dtm_sec;
+ if first.fs_dtm; *Choose pair that is closest in time when BG paired with multiple GM;
+run;
+
+proc sort data=paired_bg2; by event subjid sensor dtm_sec abstimediff fs_dtm; run;
+
+data paired_bg3;
+ set paired_bg2;
+ by event subjid sensor dtm_sec abstimediff fs_dtm;
+ if first.dtm_sec; *Choose pair that is closest in time when GM paired with multiple BG;
+ format ref_type $25.;
+ ref_type='BG'; cgm_rslt=gl; ref_rslt=meter_rslt;
+ bias=cgm_rslt-ref_rslt; abs_bias=abs(bias); pbias=100*(bias)/ref_rslt; abs_pbias=abs(pbias);
+ if nday>15 then nday=floor(et);
+ if ref_rslt lt 20 or ref_rslt gt 500 then excl='Y'; *Out of range BG readings;
+ if gl lt 40 or gl gt 400 then excl='Y'; *Out of range GM readings;
+run;
+```
+
